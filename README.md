@@ -11,6 +11,8 @@ This fork runs the RP2350B on the WiFi cartridge Rev B (https://github.com/hazy2
 
 Not run on hardware yet (the board is not built).
 
+License: GPL-3, as upstream (`LICENSE`); this fork's additions (`src/esp_link.rs`, `link-tester/`, `tests-host/`) are GPL-3 too.
+
 # Firmware for the RP2350B based Gameboy cartridge (Croco Cartridge V2)
 Utilizing the power of PIO to create a open-source flashcartridge for the gameboy
 ![Photo of cartridge PCB](images/cartridge_photo.jpg)
