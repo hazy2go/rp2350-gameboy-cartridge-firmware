@@ -1,0 +1,22 @@
+[package]
+edition = "2021"
+name = "link-tester"
+version = "0.1.0"
+license = "GPLv3"
+publish = false
+
+# Bench test of the RP2350 <-> ESP32-C3 SPI link on a Raspberry Pi Pico 2 (RP2350A) wired to a XIAO ESP32C3 running
+# the radio app with the XIAO board profile. Uses ../src/esp_link.rs unchanged. See README.md.
+
+[dependencies]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa", "binary-info"] }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["defmt"] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["defmt"] }
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
+cortex-m-rt = "0.7.0"
+static_cell = "2.1"
