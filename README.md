@@ -1,3 +1,15 @@
+# WiFi cartridge fork (hazy2go)
+
+This fork runs the RP2350B on the WiFi cartridge Rev B (https://github.com/hazy2go/wifi-game-boy-cartridge): Croco Cartridge V2.1 plus an ESP32-C3 radio on the shared SPI0 bus. Changes from upstream:
+- **ESP32-C3 link** (`src/esp_link.rs`): SPI master for protocol v1 (spec: `docs/ARCHITECTURE.md` in the hardware repo). Chip select on GPIO46, 8 MHz, polled every 1 ms from core 1. Serves the WiFi mailbox in MBC5 RAM bank 15, but only to ROMs that opt in: `WIFICART` at 0x0150, MBC5, 128 KB RAM.
+- **Logging is defmt-RTT** over the SWD Tag-Connect. GPIO46 was the debug UART TX.
+- GPIO46 is driven high right after reset, before the first SD or RTC access. The pin has no pull-up, and the RP2350 resets with pull-downs.
+- **MBC5 RAM banking fix:** the bank select used `& 0x03`, so banks 4-15 of a 128 KB save aliased onto banks 0-3. It now masks with the bank count from the header.
+- Host tests: `cd tests-host && cargo test --target "$(rustc -vV | sed -n 's/host: //p')"`. They replay the reference transcript from the hardware repo (`sim/system/el_vectors.c`) and check the Rust master byte for byte.
+- Builds natively on macOS too: `GBDK_PATH=<gbdk-2020 4.5.0> cargo build --release`, with the Rust target `thumbv8m.main-none-eabihf`.
+
+Not run on hardware yet (the board is not built).
+
 # Firmware for the RP2350B based Gameboy cartridge (Croco Cartridge V2)
 Utilizing the power of PIO to create a open-source flashcartridge for the gameboy
 ![Photo of cartridge PCB](images/cartridge_photo.jpg)

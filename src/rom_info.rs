@@ -37,6 +37,8 @@ pub struct RomInfo {
     pub has_rtc: bool,
     pub mbc: MbcType,
     pub savefile: ArrayString<16>,
+    /// The ROM opted in to the WiFi mailbox: "WIFICART" at 0x0150, MBC5, 128 KB RAM (bank 15 = mailbox).
+    pub wifi_mailbox: bool,
 }
 
 impl RomInfo {
@@ -80,6 +82,10 @@ impl RomInfo {
 
         let rom_bank_count = 1u16 << (first_bank[0x0148] as u16 + 1);
 
+        let wifi_mailbox = matches!(mbc, MbcType::Mbc5)
+            && ram_bank_count == 16
+            && first_bank.get(0x150..0x158) == Some(&b"WIFICART"[..]);
+
         let mut savefile = ArrayString::<16>::new();
         savefile.push_str(savefile_str);
 
@@ -89,6 +95,7 @@ impl RomInfo {
             has_rtc,
             mbc,
             savefile,
+            wifi_mailbox,
         })
     }
 }
