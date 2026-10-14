@@ -304,8 +304,10 @@ impl<'a, 'd, PIO: Instance, const SM: usize> Mbc for Mbc5<'a, 'd, PIO, SM> {
     fn run(&mut self) {
         let mut rom_bank = 1u16;
         let mut rom_bank_new = 1u16;
-        let mut ram_bank = 1u8;
-        let mut ram_bank_new = 1u8;
+        // the RAM pointer starts at bank 0 (main.rs), so must this; upstream started at 1, so a game whose first
+        // select was bank 1 stayed on bank 0
+        let mut ram_bank = 0u8;
+        let mut ram_bank_new = 0u8;
 
         let rom_bank_mask = 0x1FFu16;
         let ram_bank_mask = 0x0Fu8;

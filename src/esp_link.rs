@@ -37,6 +37,8 @@ pub const MB_RAIL: usize = 0x06;
 pub const MB_RES: usize = 0x07;
 pub const MB_REQ: usize = 0x10;
 pub const MB_RESP: usize = 0x100;
+/// Mailbox bytes cleared at start: header, request, response.
+pub const MB_CLEAR: usize = 0x200;
 
 /// The 0x2000-byte mailbox bank. On the cartridge the Game Boy writes it through DMA at any time, so the
 /// implementation must use volatile accesses.
@@ -91,6 +93,7 @@ pub struct Master {
     fetch_due: bool,
     fetch_len: u8,
     ever_valid: bool,
+    session: u8,
     t_pending_ms: u32,
     t_valid_ms: u32,
     t_accept_ms: u32,
@@ -102,12 +105,14 @@ pub struct Master {
 }
 
 impl Master {
-    /// Clears the mailbox header. Call before the Game Boy runs.
-    pub fn new(mb: &mut impl Mailbox, now_ms: u32) -> Self {
-        for i in 0..MB_REQ {
+    /// Clears A000-A1FF. Call before the Game Boy runs. session: random, new on every boot (the ESP may stay
+    /// powered through an RP2350 restart and must drop its old job); 0 is replaced by 1.
+    pub fn new(mb: &mut impl Mailbox, now_ms: u32, session: u8) -> Self {
+        for i in 0..MB_CLEAR {
             mb.set(i, 0);
         }
         Master {
+            session: if session == 0 { 1 } else { session },
             t_pending_ms: now_ms,
             t_valid_ms: now_ms,
             t_accept_ms: now_ms,
@@ -117,6 +122,9 @@ impl Master {
     }
 
     fn finish(&mut self, mb: &mut impl Mailbox, status: u8, data: &[u8]) {
+        for i in MB_REQ..MB_RESP {
+            mb.set(i, 0); // the request may hold a WiFi password: keep it out of the .sav
+        }
         for (i, &b) in data.iter().enumerate() {
             mb.set(MB_RESP + i, b);
         }
@@ -137,6 +145,7 @@ impl Master {
         tx[1] = typ;
         tx[2] = if self.ack_valid { 1 } else { 0 };
         tx[3] = if self.ack_valid { self.ack } else { 0 };
+        tx[7] = self.session;
     }
 
     /// Builds the next transaction into tx; returns its length (a multiple of 4).
