@@ -29,14 +29,15 @@ use embassy_rp::spi::Blocking;
 use embassy_rp::spinlock_mutex::blocking_mutex::SpinlockMutex;
 use embassy_rp::spinlock_mutex::SpinlockRawMutex;
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_rp::{bind_interrupts, clocks, config as rpconfig, otp, pac, spi, Peri};
+use embassy_rp::interrupt::InterruptExt;
+use embassy_rp::{bind_interrupts, clocks, config as rpconfig, interrupt, otp, pac, spi, Peri};
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 
 use embassy_usb::msos::{self, windows_version};
 use embassy_usb::{Config, UsbDevice};
 
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use embedded_hal_1::spi::SpiDevice;
 
@@ -610,7 +611,7 @@ async fn main(spawner: Spawner) {
     // header (a SEQ restored from the save file must not hide the ROM's first request).
     let esp_link = if rom_info.wifi_mailbox {
         let mut mailbox = MailboxBank(unsafe { ptr::addr_of_mut!(_s_gb_save_ram).add(15 * 0x2000) });
-        let master = esp_link::Master::new(&mut mailbox, Instant::now().as_millis() as u32);
+        let master = esp_link::Master::new(&mut mailbox, Instant::now().as_millis() as u32, session_byte());
         let mut config = spi::Config::default();
         config.frequency = 8_000_000;
         info!("WiFi ROM: serving the mailbox on RAM bank 15");
@@ -627,6 +628,14 @@ async fn main(spawner: Spawner) {
             p.CORE1,
             unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
             move || {
+                // NVIC enables are per core. embassy_rp::init enabled the timer and GPIO interrupts on core0 only,
+                // and core0 runs the MBC loop with interrupts off, so without this no Timer/Ticker and no GPIO
+                // wait (save button) on core1 would ever wake.
+                unsafe {
+                    interrupt::TIMER0_IRQ_0.enable();
+                    interrupt::IO_IRQ_BANK0.set_priority(interrupt::Priority::P3);
+                    interrupt::IO_IRQ_BANK0.enable();
+                }
                 let executor1 = EXECUTOR1.init(Executor::new());
                 let gb_save_ram = unsafe {
                     core::slice::from_raw_parts(
@@ -688,6 +697,15 @@ async fn usb_task(mut usb: MyUsbDevice) -> ! {
     usb.run().await
 }
 
+/// Session byte for the ESP link: ROSC random bits mixed with the timer (what embassy's RoscRng reads), never 0.
+fn session_byte() -> u8 {
+    let mut acc = Instant::now().as_ticks() as u8;
+    for _ in 0..16 {
+        acc = acc.rotate_left(1) ^ pac::ROSC.randombit().read().randombit() as u8;
+    }
+    if acc == 0 { 1 } else { acc }
+}
+
 /// Polls the ESP every 1 ms (there is no IRQ line) and serves the mailbox. Protocol: esp_link.rs.
 #[embassy_executor::task]
 async fn esp_link_task(
@@ -695,11 +713,11 @@ async fn esp_link_task(
     mut master: esp_link::Master,
     mut mailbox: MailboxBank,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(1));
     let mut tx = [0u8; esp_link::MAX_XFER];
     let mut rx = [0u8; esp_link::MAX_XFER];
     loop {
-        ticker.next().await;
+        // a plain delay, not a Ticker: after an SD save stalls core1 a Ticker would fire the missed ticks back to back
+        Timer::after(Duration::from_millis(1)).await;
         let now = Instant::now().as_millis() as u32;
         for k in 0..2 {
             if k > 0 {

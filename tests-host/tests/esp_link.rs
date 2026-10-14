@@ -26,7 +26,7 @@ fn crc_check_value() {
 fn replay_reference_transcript() {
     let text = include_str!("esp_link_vectors.txt");
     let mut mb = Mb([0; 0x2000]);
-    let mut m = Master::new(&mut mb, 0);
+    let mut m = Master::new(&mut mb, 0, 0xA7);
     let mut last: Option<(u32, Vec<u8>, Vec<u8>)> = None;
     let (mut xfers, mut checks) = (0, 0);
     let run = |m: &mut Master, mb: &mut Mb, ms: u32, mosi: &[u8], miso: &[u8], line: usize| {
@@ -66,6 +66,12 @@ fn replay_reference_transcript() {
                 let want = unhex(f[2]);
                 assert_eq!(&mb.0[MB_RESP..MB_RESP + want.len()], &want[..], "response differs at ms {} (line {})", f[1], ln + 1);
                 checks += 1;
+            }
+            "S" => {
+                // the RP2350 restarted: new master, new session (the ESP keeps running)
+                let ms: u32 = f[1].parse().unwrap();
+                m = Master::new(&mut mb, ms, u8::from_str_radix(f[2], 16).unwrap());
+                last = None;
             }
             _ => panic!("bad line {}", ln + 1),
         }
