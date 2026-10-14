@@ -5,6 +5,7 @@ This fork runs the RP2350B on the WiFi cartridge Rev B (https://github.com/hazy2
 - **Logging is defmt-RTT** over the SWD Tag-Connect. GPIO46 was the debug UART TX.
 - GPIO46 is driven high right after reset, before the first SD or RTC access. The pin has no pull-up, and the RP2350 resets with pull-downs.
 - **MBC5 RAM banking fix:** the bank select used `& 0x03`, so banks 4-15 of a 128 KB save aliased onto banks 0-3. It now masks with the bank count from the header.
+- **Link tester** (`link-tester/`): the same master on a Pico 2 against a XIAO ESP32C3, for bench tests before the cart exists.
 - Host tests: `cd tests-host && cargo test --target "$(rustc -vV | sed -n 's/host: //p')"`. They replay the reference transcript from the hardware repo (`sim/system/el_vectors.c`) and check the Rust master byte for byte.
 - Builds natively on macOS too: `GBDK_PATH=<gbdk-2020 4.5.0> cargo build --release`, with the Rust target `thumbv8m.main-none-eabihf`.
 
