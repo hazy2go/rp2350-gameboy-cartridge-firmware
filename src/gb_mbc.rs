@@ -271,6 +271,7 @@ pub struct Mbc5<'a, 'd, PIO: Instance, const SM: usize> {
     current_ram_bank_pointer: NonNull<*mut u8>,
     gb_ram_memory: &'a mut [u8],
     ram_control: &'a mut dyn MbcRamControl,
+    ram_bank_select_mask: u8,
 }
 
 impl<'a, 'd, PIO: Instance, const SM: usize> Mbc5<'a, 'd, PIO, SM> {
@@ -280,15 +281,21 @@ impl<'a, 'd, PIO: Instance, const SM: usize> Mbc5<'a, 'd, PIO, SM> {
         ram_bank_pointer: *mut *mut u8,
         gb_ram_memory: &'a mut [u8],
         ram_control: &'a mut dyn MbcRamControl,
+        ram_bank_count: u8,
     ) -> Self {
         let current_rom_bank_pointer = NonNull::new(current_rom_bank).unwrap();
         let current_ram_bank_pointer = NonNull::new(ram_bank_pointer).unwrap();
+        // RAM banks the cartridge really has (header 0x149: 0, 1, 4, 8 or 16). Upstream masked with 0x03, so
+        // banks 4-15 of a 128 KB save aliased onto 0-3 (and the WiFi mailbox, bank 15, onto bank 3). Rumble
+        // carts use bit 3 for the motor; they have at most 4 banks, so the mask keeps them right too.
+        let ram_bank_select_mask = (ram_bank_count.max(1).next_power_of_two() - 1) & 0x0F;
         Self {
             rx_fifo,
             current_rom_bank_pointer,
             current_ram_bank_pointer,
             gb_ram_memory,
             ram_control,
+            ram_bank_select_mask,
         }
     }
 }
@@ -351,7 +358,7 @@ impl<'a, 'd, PIO: Instance, const SM: usize> Mbc for Mbc5<'a, 'd, PIO, SM> {
                         self.current_ram_bank_pointer.as_ptr(),
                         self.gb_ram_memory
                             .as_mut_ptr()
-                            .add((ram_bank & 0x03) as usize * 0x2000usize),
+                            .add((ram_bank & self.ram_bank_select_mask) as usize * 0x2000usize),
                     )
                 }
             }

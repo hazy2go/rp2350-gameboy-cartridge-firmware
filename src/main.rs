@@ -23,13 +23,11 @@ use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::multicore::{spawn_core1, Stack};
 use embassy_rp::peripherals::{PIN_46, SPI1, USB};
-use embassy_rp::peripherals::{PIO0, PIO1, PIO2, SPI0, UART0};
+use embassy_rp::peripherals::{PIO0, PIO1, PIO2, SPI0};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::spi::Blocking;
 use embassy_rp::spinlock_mutex::blocking_mutex::SpinlockMutex;
 use embassy_rp::spinlock_mutex::SpinlockRawMutex;
-use embassy_rp::uart::UartTx;
-use embassy_rp::uart::{self};
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 use embassy_rp::{bind_interrupts, clocks, config as rpconfig, otp, pac, spi, Peri};
 
@@ -38,9 +36,9 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_usb::msos::{self, windows_version};
 use embassy_usb::{Config, UsbDevice};
 
-use embassy_time::Timer;
+use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use embedded_io::{ErrorType, Write};
+use embedded_hal_1::spi::SpiDevice;
 
 use embedded_sdmmc::sdcard::SdCard;
 use embedded_sdmmc::VolumeManager;
@@ -57,7 +55,7 @@ use core::{ptr, str};
 use arrayvec::ArrayString;
 
 use defmt::{error, info, unwrap, warn};
-use {defmt_serial as _, panic_probe as _};
+use {defmt_rtt as _, panic_probe as _};
 
 use static_cell::StaticCell;
 
@@ -102,6 +100,8 @@ use mcp795xx::{DateTimeAccess, Mcp795xx};
 mod production_data;
 use production_data::ProductionData;
 
+mod esp_link;
+
 // Include the generated-file as a separate module
 pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
@@ -130,24 +130,24 @@ bind_interrupts!(struct Irqs {
 // This is a randomly generated GUID to allow clients on Windows to find our device
 const DEVICE_INTERFACE_GUIDS: &[&str] = &["{F5E9F718-9228-4B8F-BE38-E53DE6FDCE2B}"];
 
-static SERIAL: StaticCell<SerialWrapper> = StaticCell::new();
+/// The ESP32-C3 radio on the shared SPI0 bus, chip select on GPIO46 (was the debug UART TX; logging is defmt-RTT).
+type EspSpiDevice = SpiDeviceWithConfig<
+    'static,
+    SpinlockRawMutex<0>,
+    spi::Spi<'static, SPI0, Blocking>,
+    Output<'static>,
+>;
 
-struct SerialWrapper<'a> {
-    uart: UartTx<'a, UART0, embassy_rp::uart::Blocking>,
-}
+/// RAM bank 15 = WiFi mailbox. The Game Boy writes it by DMA at any time, so every access is volatile.
+struct MailboxBank(*mut u8);
+unsafe impl Send for MailboxBank {}
 
-impl<'a> ErrorType for SerialWrapper<'a> {
-    type Error = uart::Error;
-}
-
-impl<'a> Write for SerialWrapper<'a> {
-    fn write(&mut self, word: &[u8]) -> Result<usize, uart::Error> {
-        self.uart.blocking_write(word).unwrap();
-        Ok(word.len())
+impl esp_link::Mailbox for MailboxBank {
+    fn get(&self, off: usize) -> u8 {
+        unsafe { ptr::read_volatile(self.0.add(off)) }
     }
-
-    fn flush(&mut self) -> Result<(), uart::Error> {
-        self.uart.blocking_flush()
+    fn set(&mut self, off: usize, v: u8) {
+        unsafe { ptr::write_volatile(self.0.add(off), v) }
     }
 }
 
@@ -231,12 +231,10 @@ async fn main(spawner: Spawner) {
     pll_config.post_div2 = 1;
 
     let p = embassy_rp::init(rp_config);
-    let config = uart::Config::default();
-    let uart = uart::UartTx::new_blocking(p.UART0, p.PIN_46, config);
 
-    let serialwrapper = SerialWrapper { uart };
-
-    defmt_serial::defmt_serial(SERIAL.init(serialwrapper));
+    // ESP chip select: no pull-up on the board and the RP2350 resets with pull-downs, so it reads as selected
+    // until driven. It must be high before the first SD or RTC transaction on the shared bus.
+    let esp_cs = Output::new(p.PIN_46, Level::High);
 
     let sys_freq = clocks::clk_sys_freq();
     info!(
@@ -601,10 +599,27 @@ async fn main(spawner: Spawner) {
             ptr::addr_of_mut!(gb_ram_ptr),
             gb_save_ram,
             dma_command_machine,
+            rom_info.ram_bank_count,
         ),
         _ => {
             panic!("unimplemented MBC");
         }
+    };
+
+    // WiFi mailbox: set up here, before the Game Boy leaves reset, because the master clears the mailbox
+    // header (a SEQ restored from the save file must not hide the ROM's first request).
+    let esp_link = if rom_info.wifi_mailbox {
+        let mut mailbox = MailboxBank(unsafe { ptr::addr_of_mut!(_s_gb_save_ram).add(15 * 0x2000) });
+        let master = esp_link::Master::new(&mut mailbox, Instant::now().as_millis() as u32);
+        let mut config = spi::Config::default();
+        config.frequency = 8_000_000;
+        info!("WiFi ROM: serving the mailbox on RAM bank 15");
+        Some((SpiDeviceWithConfig::new(spi_bus, esp_cs, config), master, mailbox))
+    } else {
+        // Not a WiFi ROM: the ESP stays deselected. Never drop the pin: dropping an Output releases it, the
+        // pull-down would select the ESP, and its MISO buffer would fight the SD card and the RTC.
+        core::mem::forget(esp_cs);
+        None
     };
 
     if rom_info.ram_bank_count > 0 || rom_info.has_rtc {
@@ -620,6 +635,9 @@ async fn main(spawner: Spawner) {
                     )
                 };
                 executor1.run(|spawner| {
+                    if let Some((dev, master, mailbox)) = esp_link {
+                        unwrap!(spawner.spawn(esp_link_task(dev, master, mailbox)));
+                    }
                     unwrap!(spawner.spawn(core1_task(
                         p.PIN_4.into(),
                         ws2812,
@@ -668,6 +686,35 @@ type MyUsbDevice = UsbDevice<'static, MyUsbDriver>;
 #[embassy_executor::task]
 async fn usb_task(mut usb: MyUsbDevice) -> ! {
     usb.run().await
+}
+
+/// Polls the ESP every 1 ms (there is no IRQ line) and serves the mailbox. Protocol: esp_link.rs.
+#[embassy_executor::task]
+async fn esp_link_task(
+    mut dev: EspSpiDevice,
+    mut master: esp_link::Master,
+    mut mailbox: MailboxBank,
+) {
+    let mut ticker = Ticker::every(Duration::from_millis(1));
+    let mut tx = [0u8; esp_link::MAX_XFER];
+    let mut rx = [0u8; esp_link::MAX_XFER];
+    loop {
+        ticker.next().await;
+        let now = Instant::now().as_millis() as u32;
+        for k in 0..2 {
+            if k > 0 {
+                Timer::after_micros(esp_link::GAP_US).await; // CS high: the ESP's SPI slave re-queues
+            }
+            let n = master.next(now, &mut mailbox, &mut tx);
+            if dev.transfer(&mut rx[..n], &tx[..n]).is_err() {
+                rx[..n].fill(0);
+            }
+            master.done(now, &mut mailbox, &rx[..n]);
+            if !master.more() {
+                break;
+            }
+        }
+    }
 }
 
 #[embassy_executor::task]

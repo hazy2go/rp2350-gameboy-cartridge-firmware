@@ -1,0 +1,9 @@
+[package]
+name = "croco-host-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Host-side tests for the hardware-free modules of the firmware.
+# Run: cargo test --target "$(rustc -vV | sed -n 's/host: //p')"
+# (the firmware's .cargo/config.toml sets the RP2350 target as the default)

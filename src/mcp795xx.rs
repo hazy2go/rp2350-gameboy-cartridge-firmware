@@ -18,7 +18,7 @@
 #![allow(unused)]
 
 use embedded_hal_1::spi::{Operation, SpiDevice};
-use {defmt_serial as _, panic_probe as _};
+use {defmt_rtt as _, panic_probe as _};
 
 pub use rtcc::{DateTimeAccess, Datelike, NaiveDate, NaiveDateTime, Rtcc, Timelike};
 

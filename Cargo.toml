@@ -15,11 +15,10 @@ embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a795
 embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "05a6f7a7957d891c20f00f428a36abb0da1c921a", features = ["defmt"] }
 
 defmt = "0.3"
-#defmt-rtt = "0.4"
+defmt-rtt = "0.4"
 embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 embedded-hal-bus = { version = "0.1", features = ["async"] }
 embedded-io = { version = "0.6.1", features = ["defmt-03"] }
-defmt-serial = { version = "0.10.0" }
 fixed = "1.23.1"
 fixed-macro = "1.2"
 static_cell = "2.1"
